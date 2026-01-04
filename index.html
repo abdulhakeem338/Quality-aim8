@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام إدارة أهداف الموظفين</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" xintegrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <!-- Load XLSX in main thread -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script>
+        const React = window.React;
+        const ReactDOM = window.ReactDOM;
+        const { useState, useEffect, useCallback, createElement: e } = React;
+        const { createRoot } = ReactDOM;
+
+        // services/localStorageService.ts
+        const STORAGE_KEY = 'employeesData';
+        const LOCAL_STORAGE_MAX_BYTES = 4.5 * 1024 * 1024;
+
+        function saveEmployeesData(employees) {
+            try {
+                const stringifiedData = JSON.stringify(employees);
+                if (stringifiedData.length > LOCAL_STORAGE_MAX_BYTES) {
+                    console.warn('Data too large for localStorage');
+                    alert(`تحذير: البيانات كبيرة جدًا (${(stringifiedData.length / (1024 * 1024)).toFixed(2)} ميجابايت). لن يتم حفظ التغييرات تلقائيًا.`);
+                    return false;
+                }
+                localStorage.setItem(STORAGE_KEY, stringifiedData);
+                return true;
+            } catch (error) {
+                console.error('Failed to save data:', error);
+                return false;
+            }
+        }
+
+        function loadEmployeesData() {
+            try {
+                const savedData = localStorage.getItem(STORAGE_KEY);
+                return savedData ? JSON.parse(savedData) : [];
+            } catch (error) {
+                console.error('Failed to load data:', error);
+                return [];
+            }
+        }
+
+        const MONTHS_GREGORIAN = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+                                  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+        const createDefaultGoals = (year) => {
+            const currentYear = year || new Date().getFullYear();
+            return [
+                {
+                    id: Date.now() + Math.random(),
+                    title: 'مثال: تحسين الأداء الوظيفي',
+                    year: currentYear,
+                    tasks: [
+                        { id: Date.now() + 1, name: 'حضور دورة تدريبية', estimatedDays: 5, isRecurring: false, frequency: 'مرة واحدة', expectedMonth: 'يناير' }
+                    ]
+                }
+            ];
+        };
+
+        // components/Button.tsx
+        const Button = ({ variant = 'primary', children, className = '', ...props }) => {
+            let baseStyles = 'px-4 py-2 md:px-5 md:py-2 rounded-lg cursor-pointer font-bold transition-all duration-300 flex items-center justify-center space-x-2 space-x-reverse text-sm md:text-base whitespace-nowrap';
+            let variantStyles = '';
+
+            switch (variant) {
+                case 'primary': variantStyles = 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md'; break;
+                case 'success': variantStyles = 'bg-green-600 text-white hover:bg-green-700 shadow-md'; break;
+                case 'danger': variantStyles = 'bg-red-500 text-white hover:bg-red-600 shadow-md'; break;
+                case 'secondary': variantStyles = 'bg-gray-500 text-white hover:bg-gray-600 shadow-md'; break;
+                case 'warning': variantStyles = 'bg-amber-500 text-white hover:bg-amber-600 shadow-md'; break;
+            }
+
+            return e('button', { className: `${baseStyles} ${variantStyles} ${className}`, ...props }, children);
+        };
+
+        // components/EmployeeCard.tsx
+        const EmployeeCard = ({ employee, goalsForSelectedYear, calculateEmployeeProgress, onClick }) => {
+            const totalGoals = goalsForSelectedYear.length;
+            const avgProgress = calculateEmployeeProgress(employee, goalsForSelectedYear);
+
+            return e('div', {
+                className: "bg-white p-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 cursor-pointer border border-gray-100 hover:border-indigo-400 transform hover:-translate-y-1",
+                onClick: onClick
+            },
+                e('div', { className: "flex justify-between items-start mb-4" },
+                    e('div', null,
+                        e('h3', { className: "text-xl font-bold text-gray-800" }, employee.name),
+                        e('p', { className: "text-indigo-500 text-sm font-medium mt-1" }, employee.position)
+                    ),
+                    e('div', { className: "bg-indigo-50 p-2 rounded-lg" },
+                        e('i', { className: "fas fa-user-tie text-indigo-500 text-xl" })
+                    )
+                ),
+                e('div', { className: "flex justify-between items-center pt-4 border-t border-gray-100" },
+                    e('div', { className: "text-center" },
+                        e('div', { className: "text-2xl font-bold text-gray-700" }, totalGoals),
+                        e('div', { className: "text-gray-400 text-xs mt-1" }, "أهداف")
+                    ),
+                    e('div', { className: "text-center" },
+                        e('div', { className: `text-2xl font-bold ${avgProgress >= 100 ? 'text-green-500' : 'text-indigo-500'}` }, `${avgProgress}%`),
+                        e('div', { className: "text-gray-400 text-xs mt-1" }, "الإنجاز")
+                    )
+                )
+            );
+        };
+
+        // components/AddEmployeeModal.tsx
+        const AddEmployeeModal = ({ isOpen, onClose, onAddEmployee }) => {
+            const [name, setName] = useState('');
+            const [position, setPosition] = useState('');
+
+            const handleSubmit = () => {
+                if (name.trim() && position.trim()) {
+                    onAddEmployee(name.trim(), position.trim());
+                    setName(''); setPosition('');
+                } else {
+                    alert('الرجاء إدخال البيانات كاملة');
+                }
+            };
+
+            if (!isOpen) return null;
+
+            return e('div', { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4 backdrop-blur-sm" },
+                e('div', { className: "bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full animate-fade-in-up" },
+                    e('h3', { className: "text-2xl font-bold text-gray-800 mb-6 text-center" }, "إضافة موظف جديد"),
+                    e('div', { className: "space-y-4" },
+                        e('input', {
+                            type: "text", className: "w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-right",
+                            placeholder: "اسم الموظف", value: name, onChange: (e) => setName(e.target.value)
+                        }),
+                        e('input', {
+                            type: "text", className: "w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-right",
+                            placeholder: "المسمى الوظيفي", value: position, onChange: (e) => setPosition(e.target.value)
+                        })
+                    ),
+                    e('div', { className: "flex justify-end gap-3 mt-8" },
+                        e(Button, { variant: "secondary", onClick: onClose }, "إلغاء"),
+                        e(Button, { variant: "primary", onClick: handleSubmit }, "حفظ")
+                    )
+                )
+            );
+        };
+
+        const AddGoalModal = ({ isOpen, onClose, onAddGoal, selectedYear }) => {
+            const [title, setTitle] = useState('');
+            const [year, setYear] = useState(selectedYear);
+            
+            useEffect(() => setYear(selectedYear), [selectedYear]);
+
+            if (!isOpen) return null;
+            return e('div', { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" },
+                e('div', { className: "bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full" },
+                    e('h3', { className: "text-2xl font-bold mb-6 text-center" }, "إضافة هدف"),
+                    e('input', { className: "w-full p-3 border mb-4 rounded-lg text-right", placeholder: "عنوان الهدف", value: title, onChange: e => setTitle(e.target.value) }),
+                    e('input', { type: "number", className: "w-full p-3 border mb-6 rounded-lg text-center", value: year, onChange: e => setYear(e.target.value) }),
+                    e('div', { className: "flex justify-end gap-3" },
+                        e(Button, { variant: "secondary", onClick: onClose }, "إلغاء"),
+                        e(Button, { variant: "primary", onClick: () => { if(title) { onAddGoal(title, year); setTitle(''); } } }, "إضافة")
+                    )
+                )
+            );
+        };
+
+        const AddTaskModal = ({ isOpen, onClose, onAddTask }) => {
+            const [name, setName] = useState('');
+            const [days, setDays] = useState(1);
+            const [freq, setFreq] = useState('مرة واحدة');
+            const [month, setMonth] = useState('يناير');
+
+            if (!isOpen) return null;
+            return e('div', { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" },
+                e('div', { className: "bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full" },
+                    e('h3', { className: "text-2xl font-bold mb-6 text-center" }, "إضافة مهمة"),
+                    e('input', { className: "w-full p-3 border mb-4 rounded-lg text-right", placeholder: "اسم المهمة", value: name, onChange: e => setName(e.target.value) }),
+                    e('div', { className: "grid grid-cols-2 gap-4 mb-4" },
+                        e('input', { type: "number", className: "p-3 border rounded-lg text-center", placeholder: "الأيام", value: days, onChange: e => setDays(e.target.value) }),
+                        e('select', { className: "p-3 border rounded-lg text-right", value: freq, onChange: e => setFreq(e.target.value) },
+                            e('option', { value: "مرة واحدة" }, "مرة واحدة"), e('option', { value: "أسبوعيًا" }, "أسبوعيًا"), e('option', { value: "شهريًا" }, "شهريًا")
+                        )
+                    ),
+                    e('select', { className: "w-full p-3 border mb-6 rounded-lg text-right", value: month, onChange: e => setMonth(e.target.value) },
+                        MONTHS_GREGORIAN.map(m => e('option', { key: m, value: m }, m))
+                    ),
+                    e('div', { className: "flex justify-end gap-3" },
+                        e(Button, { variant: "secondary", onClick: onClose }, "إلغاء"),
+                        e(Button, { variant: "primary", onClick: () => { if(name) { onAddTask(name, days, freq, month); setName(''); setDays(1); } } }, "إضافة")
+                    )
+                )
+            );
+        };
+
+        const ResultsReportModal = ({ isOpen, onClose, onSave, initialData, title }) => {
+            const [outcome, setOutcome] = useState('');
+            const [notes, setNotes] = useState('');
+            const [rating, setRating] = useState(0);
+
+            useEffect(() => {
+                if (isOpen && initialData) {
+                    setOutcome(initialData.actualOutcome || '');
+                    setNotes(initialData.investigatorNotes || '');
+                    setRating(initialData.finalRating || 0);
+                }
+            }, [isOpen, initialData]);
+
+            if (!isOpen) return null;
+            return e('div', { className: "fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4" },
+                e('div', { className: "bg-white p-8 rounded-2xl shadow-2xl max-w-lg w-full" },
+                    e('h3', { className: "text-xl font-bold mb-4 text-center" }, `تقرير: ${title}`),
+                    e('textarea', { className: "w-full p-3 border mb-3 rounded-lg text-right h-24", placeholder: "النتيجة الفعلية", value: outcome, onChange: e => setOutcome(e.target.value) }),
+                    e('textarea', { className: "w-full p-3 border mb-3 rounded-lg text-right h-24", placeholder: "ملاحظات المحقق", value: notes, onChange: e => setNotes(e.target.value) }),
+                    e('label', { className: "block mb-2 font-bold" }, "التقييم النهائي (%)"),
+                    e('input', { type: "number", className: "w-full p-3 border mb-6 rounded-lg text-center", max: 100, min: 0, value: rating, onChange: e => setRating(e.target.value) }),
+                    e('div', { className: "flex justify-end gap-3" },
+                        e(Button, { variant: "secondary", onClick: onClose }, "إلغاء"),
+                        e(Button, { variant: "primary", onClick: () => onSave(outcome, notes, rating) }, "حفظ التقرير")
+                    )
+                )
+            );
+        };
+
+        // components/GoalSection.tsx
+        const GoalSection = ({ goal, goalIndex, onDeleteGoal, onUpdateGoalTitle, onAddTask, onDeleteTask, onUpdateTask, onOpenResults, currentPhase }) => {
+            const totalEstimatedDays = goal.tasks.reduce((acc, t) => {
+                let days = parseInt(t.estimatedDays) || 0;
+                if (t.frequency === 'أسبوعيًا') days *= 52;
+                if (t.frequency === 'شهريًا') days *= 12;
+                return acc + days;
+            }, 0);
+
+            const progress = goal.finalRating !== undefined ? goal.finalRating : 
+                (goal.tasks.length ? Math.round(goal.tasks.reduce((sum, t) => sum + (t.finalRating || 0), 0) / goal.tasks.length) : 0);
+
+            return e('div', { className: "bg-white border border-gray-200 rounded-xl p-6 mb-6 shadow-sm hover:shadow-md transition-all" },
+                e('div', { className: "flex flex-col md:flex-row justify-between items-center mb-5 pb-4 border-b gap-4" },
+                    e('input', {
+                        className: "text-xl font-bold text-gray-800 bg-transparent border-none focus:outline-none w-full md:w-2/3 text-right p-1",
+                        value: goal.title, disabled: currentPhase !== 'planning',
+                        onChange: (e) => onUpdateGoalTitle(goal.id, e.target.value)
+                    }),
+                    e('div', { className: "flex items-center gap-3" },
+                         e('span', { className: `font-bold px-3 py-1 rounded-full text-sm ${progress === 100 ? 'bg-green-100 text-green-700' : 'bg-indigo-100 text-indigo-700'}` }, `${progress}%`),
+                         currentPhase === 'planning' && e(Button, { variant: "danger", onClick: () => onDeleteGoal(goal.id), className: "px-3 py-1 text-xs" }, "حذف"),
+                         currentPhase !== 'planning' && e(Button, { variant: "secondary", onClick: () => onOpenResults('goal', goalIndex), className: "px-3 py-1 text-xs" }, "تقرير")
+                    )
+                ),
+                e('div', { className: "overflow-x-auto" },
+                    e('table', { className: "w-full text-right" },
+                        e('thead', { className: "bg-gray-50 text-gray-600 text-sm" },
+                            e('tr', null,
+                                e('th', { className: "p-3 rounded-r-lg" }, "المهمة"),
+                                e('th', { className: "p-3 text-center" }, "الأيام"),
+                                e('th', { className: "p-3 text-center" }, "التكرار"),
+                                e('th', { className: "p-3 text-center" }, "الشهر"),
+                                e('th', { className: "p-3 rounded-l-lg" }, "إجراءات")
+                            )
+                        ),
+                        e('tbody', null,
+                            goal.tasks.map((task, tIndex) =>
+                                e('tr', { key: task.id, className: "border-b border-gray-100" },
+                                    e('td', { className: "p-2" }, task.name), // Simplified for display
+                                    e('td', { className: "p-2 text-center" }, task.estimatedDays),
+                                    e('td', { className: "p-2 text-center" }, task.frequency),
+                                    e('td', { className: "p-2 text-center" }, task.expectedMonth),
+                                    e('td', { className: "p-2 flex gap-2 justify-center" },
+                                        currentPhase === 'planning' && e(Button, { variant: "danger", onClick: () => onDeleteTask(goal.id, task.id), className: "px-2 py-1 text-xs" }, e('i', { className: "fas fa-trash" })),
+                                        currentPhase !== 'planning' && e(Button, { variant: "secondary", onClick: () => onOpenResults('task', goalIndex, tIndex), className: "px-2 py-1 text-xs" }, e('i', { className: "fas fa-flag" }))
+                                    )
+                                )
+                            )
+                        )
+                    )
+                ),
+                currentPhase === 'planning' && e(Button, { variant: "success", onClick: () => onAddTask(goal.id), className: "mt-4 w-full md:w-auto" }, "+ إضافة مهمة")
+            );
+        };
+
+        // App.tsx
+        function App() {
+            const [employees, setEmployees] = useState([]);
+            const [currentEmpId, setCurrentEmpId] = useState(null);
+            const [viewPhase, setViewPhase] = useState('planning');
+            const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+            const [isImporting, setIsImporting] = useState(false);
+            
+            // Modals State
+            const [modals, setModals] = useState({ emp: false, goal: false, task: false, report: false });
+            const [selection, setSelection] = useState({ goalId: null, goalIndex: null, taskIndex: null });
+
+            useEffect(() => {
+                setEmployees(loadEmployeesData());
+            }, []);
+
+            // --- HELPER FUNCTIONS ---
+            const getCurrentEmp = () => employees.find(e => e.id === currentEmpId);
+            
+            const updateEmpGoals = (newGoals) => {
+                const updated = employees.map(e => e.id === currentEmpId ? { ...e, goals: newGoals } : e);
+                setEmployees(updated);
+                saveEmployeesData(updated);
+            };
+
+            const downloadTemplate = () => {
+                const XLSX = window.XLSX;
+                if (!XLSX) { alert("المكتبة غير محملة"); return; }
+                
+                const headers = [['السنة', 'اسم الموظف', 'المسمى الوظيفي', 'عنوان الهدف', 'اسم المهمة', 'الأيام المقدرة', 'التكرار', 'الشهر المتوقع']];
+                const exampleRow = [new Date().getFullYear(), 'محمد أحمد', 'مبرمج', 'تطوير الموقع', 'تصميم الواجهة', 5, 'مرة واحدة', 'يناير'];
+                
+                const wb = XLSX.utils.book_new();
+                const ws = XLSX.utils.aoa_to_sheet([...headers, exampleRow]);
+                XLSX.utils.book_append_sheet(wb, ws, "Template");
+                XLSX.writeFile(wb, "قالب_استيراد_الاهداف.xlsx");
+            };
+
+            // Main Thread Import Handler
+            const handleImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const XLSX = window.XLSX;
+                if (!XLSX) {
+                    alert('مكتبة المعالجة (XLSX) غير جاهزة. تأكد من اتصال الإنترنت.');
+                    return;
+                }
+
+                setIsImporting(true);
+
+                // Use setTimeout to allow UI to render "Loading" state before heavy processing
+                setTimeout(() => {
+                    const reader = new FileReader();
+                    
+                    reader.onload = (evt) => {
+                        try {
+                            const data = new Uint8Array(evt.target.result);
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                            const jsonSheet = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+                            if (jsonSheet.length < 2) throw new Error('الملف فارغ أو لا يحتوي على رؤوس أعمدة.');
+
+                            const headers = jsonSheet[0].map(h => String(h).trim());
+                            
+                            const getIdx = (name) => {
+                                const idx = headers.indexOf(name);
+                                if (idx === -1) throw new Error('العمود المفقود: ' + name);
+                                return idx;
+                            };
+
+                            // Map columns
+                            const cols = {
+                                year: getIdx('السنة'),
+                                empName: getIdx('اسم الموظف'),
+                                pos: getIdx('المسمى الوظيفي'),
+                                goal: getIdx('عنوان الهدف'),
+                                task: getIdx('اسم المهمة'),
+                                days: getIdx('الأيام المقدرة'),
+                                freq: getIdx('التكرار'),
+                                month: getIdx('الشهر المتوقع')
+                            };
+
+                            let empMap = new Map();
+                            let idCounter = Date.now();
+
+                            for (let i = 1; i < jsonSheet.length; i++) {
+                                const row = jsonSheet[i];
+                                if (!row[cols.empName]) continue;
+
+                                const empName = String(row[cols.empName]).trim();
+                                
+                                if (!empMap.has(empName)) {
+                                    empMap.set(empName, {
+                                        id: idCounter++,
+                                        name: empName,
+                                        position: row[cols.pos] || '',
+                                        goals: []
+                                    });
+                                }
+                                const emp = empMap.get(empName);
+                                const goalTitle = row[cols.goal];
+                                
+                                if (goalTitle) {
+                                    let goal = emp.goals.find(g => g.title === goalTitle && g.year == row[cols.year]);
+                                    if (!goal) {
+                                        goal = {
+                                            id: idCounter++,
+                                            title: goalTitle,
+                                            year: row[cols.year] || new Date().getFullYear(),
+                                            tasks: []
+                                        };
+                                        emp.goals.push(goal);
+                                    }
+
+                                    if (row[cols.task]) {
+                                        goal.tasks.push({
+                                            id: idCounter++,
+                                            name: row[cols.task],
+                                            estimatedDays: row[cols.days] || 1,
+                                            frequency: row[cols.freq] || 'مرة واحدة',
+                                            expectedMonth: row[cols.month] || 'يناير',
+                                            isRecurring: (row[cols.freq] || '') !== 'مرة واحدة'
+                                        });
+                                    }
+                                }
+                            }
+
+                            const resultData = Array.from(empMap.values());
+                            
+                            if (resultData.length === 0) {
+                                alert('لم يتم العثور على بيانات صالحة في الملف.');
+                            } else if (confirm(`تم العثور على ${resultData.length} موظفين. هل تريد استبدال البيانات الحالية؟`)) {
+                                setEmployees(resultData);
+                                saveEmployeesData(resultData);
+                                alert('تم الاستيراد بنجاح! ✅');
+                            }
+
+                        } catch (error) {
+                            console.error(error);
+                            alert('خطأ أثناء معالجة الملف: ' + error.message);
+                        } finally {
+                            setIsImporting(false);
+                            // Reset file input
+                            e.target.value = '';
+                        }
+                    };
+
+                    reader.onerror = () => {
+                        alert('فشل قراءة الملف.');
+                        setIsImporting(false);
+                    };
+
+                    reader.readAsArrayBuffer(file);
+                }, 100);
+            };
+
+            // --- RENDER ---
+            return e('div', { className: "container mx-auto p-4 md:p-8" },
+                e('header', { className: "mb-8 text-center" },
+                    e('h1', { className: "text-3xl font-bold text-white mb-2 drop-shadow-md" }, "🎯 نظام إدارة الأهداف"),
+                    e('p', { className: "text-indigo-100" }, `السنة المالية: ${selectedYear}`)
+                ),
+                
+                !currentEmpId ? (
+                    // Employee List View
+                    e('div', { className: "bg-white/90 backdrop-blur rounded-2xl p-6 shadow-xl" },
+                        e('div', { className: "flex flex-wrap gap-3 mb-6" },
+                            e(Button, { onClick: () => setModals({...modals, emp: true}) }, "إضافة موظف"),
+                            e(Button, { variant: "success", onClick: downloadTemplate }, "📥 تحميل قالب Excel"),
+                            e('label', { className: `cursor-pointer ${isImporting ? 'opacity-50' : ''}` },
+                                e(Button, { variant: "warning", as: "div" }, isImporting ? "جاري المعالجة..." : "📤 استيراد Excel"),
+                                e('input', { type: "file", accept: ".xlsx", className: "hidden", onChange: handleImport, disabled: isImporting })
+                            ),
+                            e(Button, { variant: "danger", onClick: () => { if(confirm("حذف الكل؟")) { localStorage.clear(); setEmployees([]); } } }, "مسح الكل")
+                        ),
+                        e('div', { className: "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" },
+                            employees.map(emp => 
+                                e(EmployeeCard, { 
+                                    key: emp.id, 
+                                    employee: emp, 
+                                    goalsForSelectedYear: emp.goals.filter(g => g.year === selectedYear),
+                                    calculateEmployeeProgress: (e, goals) => {
+                                        if(!goals.length) return 0;
+                                        return Math.round(goals.reduce((acc, g) => acc + (g.finalRating || 0), 0) / goals.length);
+                                    },
+                                    onClick: () => setCurrentEmpId(emp.id)
+                                })
+                            )
+                        )
+                    )
+                ) : (
+                    // Goals View
+                    e('div', { className: "bg-gray-50 rounded-2xl p-6 shadow-xl min-h-[80vh]" },
+                        e('div', { className: "flex justify-between items-center mb-6" },
+                            e('h2', { className: "text-2xl font-bold text-gray-800" }, getCurrentEmp()?.name),
+                            e(Button, { variant: "secondary", onClick: () => setCurrentEmpId(null) }, "عودة للقائمة")
+                        ),
+                        e('div', { className: "flex justify-center mb-8 bg-white p-2 rounded-xl shadow-sm w-fit mx-auto" },
+                            ['planning', 'execution', 'results'].map(phase => 
+                                e('button', {
+                                    key: phase,
+                                    onClick: () => setViewPhase(phase),
+                                    className: `px-6 py-2 rounded-lg font-bold transition-all ${viewPhase === phase ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}`
+                                }, phase === 'planning' ? 'التخطيط' : phase === 'execution' ? 'التنفيذ' : 'النتائج')
+                            )
+                        ),
+                        viewPhase === 'planning' && e(Button, { className: "mb-6", onClick: () => setModals({...modals, goal: true}) }, "+ هدف جديد"),
+                        
+                        getCurrentEmp()?.goals.filter(g => g.year === selectedYear).map((goal, idx) => 
+                            e(GoalSection, {
+                                key: goal.id,
+                                goal: goal,
+                                goalIndex: idx,
+                                currentPhase: viewPhase,
+                                onDeleteGoal: (id) => updateEmpGoals(getCurrentEmp().goals.filter(g => g.id !== id)),
+                                onUpdateGoalTitle: (id, val) => updateEmpGoals(getCurrentEmp().goals.map(g => g.id === id ? {...g, title: val} : g)),
+                                onAddTask: (id) => { setSelection({ ...selection, goalId: id }); setModals({...modals, task: true}); },
+                                onDeleteTask: (gId, tId) => updateEmpGoals(getCurrentEmp().goals.map(g => g.id === gId ? {...g, tasks: g.tasks.filter(t => t.id !== tId)} : g)),
+                                onOpenResults: (type, gIdx, tIdx) => { setSelection({ goalIndex: gIdx, taskIndex: tIdx }); setModals({...modals, report: true}); }
+                            })
+                        )
+                    )
+                ),
+
+                // Modals Injection
+                e(AddEmployeeModal, { 
+                    isOpen: modals.emp, 
+                    onClose: () => setModals({...modals, emp: false}),
+                    onAddEmployee: (n, p) => {
+                        const newEmp = { id: Date.now(), name: n, position: p, goals: [] };
+                        setEmployees([...employees, newEmp]);
+                        saveEmployeesData([...employees, newEmp]);
+                        setModals({...modals, emp: false});
+                    }
+                }),
+                e(AddGoalModal, {
+                    isOpen: modals.goal,
+                    onClose: () => setModals({...modals, goal: false}),
+                    selectedYear: selectedYear,
+                    onAddGoal: (t, y) => {
+                        const emp = getCurrentEmp();
+                        const newGoal = { id: Date.now(), title: t, year: y, tasks: [] };
+                        updateEmpGoals([...emp.goals, newGoal]);
+                        setModals({...modals, goal: false});
+                    }
+                }),
+                e(AddTaskModal, {
+                    isOpen: modals.task,
+                    onClose: () => setModals({...modals, task: false}),
+                    onAddTask: (n, d, f, m) => {
+                        const emp = getCurrentEmp();
+                        const updatedGoals = emp.goals.map(g => {
+                            if(g.id === selection.goalId) {
+                                return { ...g, tasks: [...g.tasks, { id: Date.now(), name: n, estimatedDays: d, frequency: f, expectedMonth: m }] };
+                            }
+                            return g;
+                        });
+                        updateEmpGoals(updatedGoals);
+                        setModals({...modals, task: false});
+                    }
+                }),
+                e(ResultsReportModal, {
+                    isOpen: modals.report,
+                    onClose: () => setModals({...modals, report: false}),
+                    title: selection.taskIndex !== undefined ? "مهمة" : "هدف",
+                    initialData: selection.taskIndex !== undefined 
+                        ? getCurrentEmp()?.goals[selection.goalIndex]?.tasks[selection.taskIndex]
+                        : getCurrentEmp()?.goals[selection.goalIndex],
+                    onSave: (o, n, r) => {
+                        const emp = getCurrentEmp();
+                        const newGoals = [...emp.goals];
+                        if (selection.taskIndex !== undefined) {
+                            const task = newGoals[selection.goalIndex].tasks[selection.taskIndex];
+                            newGoals[selection.goalIndex].tasks[selection.taskIndex] = { ...task, actualOutcome: o, investigatorNotes: n, finalRating: parseInt(r) };
+                        } else {
+                            const goal = newGoals[selection.goalIndex];
+                            newGoals[selection.goalIndex] = { ...goal, actualOutcome: o, investigatorNotes: n, finalRating: parseInt(r) };
+                        }
+                        updateEmpGoals(newGoals);
+                        setModals({...modals, report: false});
+                    }
+                })
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(e(React.StrictMode, null, e(App)));
+    </script>
+</body>
+</html>
